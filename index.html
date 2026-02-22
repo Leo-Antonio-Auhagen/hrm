@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>HR and RR Monitor</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+
+<body>
+    <h1>Heart Rate and RR Interval Monitor
+        <span class="tooltip">
+            <span id="current_hr"></span>
+            <span class="tooltiptext">Current HR: as given by the device. </span>
+        </span>
+        <span class="tooltip">
+            <span id="current_hr_from_rr"></span>
+            <span class="tooltiptext">Current HR: calculated from RR intervals. </span>
+        </span>
+        <span class="tooltip">
+            <span id="current_hr_from_small_window"> </span>
+            <span class="tooltiptext">Average HR: calculated as moving average of recent HR values. </span>
+        </span>
+    </h1>
+    <span id="stats_line"></span>
+    <div id="plotspace">
+        <div id="hr_plot_outer"><div id="hr_plot"></div></div>
+        <div id="rr_plot_outer"><div id="rr_plot"></div></div>
+    </div>
+
+
+    <script>
+        async function fetchData() {
+            const resp = await fetch('/buffer');
+            const data = await resp.json();
+            return data;
+        }
+
+        function plotInitial() {
+            Plotly.newPlot('hr_plot', [{
+                y: [],
+                mode: 'lines+markers',
+                name: 'Heart Rate (bpm)'
+            }], {
+                title: 'Heart Rate',
+                yaxis: { range: [20, 230], title: 'Heart Rate (bpm)'  },
+                xaxis: { title: 'Time (sec)' },
+                plot_bgcolor: 'rgb(255,255,255,0)',     // Background color of the plot area
+                paper_bgcolor: 'rgba(255,255,255,0)' // Background color of the entire chart container
+            }, { responsive: true });
+
+            Plotly.newPlot('rr_plot', [{
+                y: [],
+                mode: 'lines+markers',
+                name: 'RR Interval (s)'
+            }], {
+                title: 'RR Intervals',
+                yaxis: { range: [0.25, 2], title: 'Interval Length (sec)' },
+                xaxis: { title: 'Time (sec)' },
+                plot_bgcolor: 'rgb(255,255,255,0)',     // Background color of the plot area
+                paper_bgcolor: 'rgba(255,255,255,0)' // Background color of the entire chart container
+            }, { responsive: true });
+        }
+
+        async function updateStats() {
+            const resp = await fetch('/stats');
+            const data = await resp.json();
+            document.getElementById("stats_line").innerHTML = `Start: ${data.start_time} <br>
+        Elapsed Time: ${data.elapsed_time_lit} <br>
+        Number of Ectopics: ${data.num_ectopics} <br>(see <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC3232430/#sec2">ectopic beats classification</a>)`;
+        }
+
+        async function updateData() {
+            const data = await fetchData();
+            updateHeartRates(data);
+            updatePlots(data);
+        }
+
+        function updateHeartRates(data) {
+            document.getElementById("current_hr").innerText = ``;
+            document.getElementById("current_hr_from_rr").innerText = ``;
+            document.getElementById("current_hr_from_small_window").innerText = ``;
+
+
+            last_x = data.rr_buffer.slice(-15);
+            const rrAvg = last_x.reduce((sum, val) => sum + val, 0) / last_x.length;
+
+            small_window_size = 10
+            last_x = data.hr_buffer.slice(-small_window_size);
+            const small_window_hr = last_x.reduce((sum, val) => sum + val, 0) / last_x.length;
+
+            setTimeout(() => {
+                document.getElementById("current_hr").innerText = `- ${data.hr_buffer[data.hr_buffer.length - 1]} bpm`; // latest HR value
+                document.getElementById("current_hr_from_rr").innerText = `- ${Math.round(60 / rrAvg * 100) / 100} bpm`
+                document.getElementById("current_hr_from_small_window").innerText = `- ${small_window_hr} bpm`
+            }, 70);
+        }
+
+        function updatePlots(data) {            
+            Plotly.update('hr_plot', { y: [data.hr_buffer] }, {}, [0]);
+            Plotly.update('rr_plot', { y: [data.rr_buffer] }, {}, [0]);
+
+
+            var last_x = data.rr_buffer.slice(-30);
+            const rrAvg = last_x.reduce((sum, val) => sum + val, 0) / last_x.length;
+
+            last_x = data.rr_buffer.slice(-15);
+            const yPrime = last_x.reduce((sum, val) => sum + val, 0) / last_x.length;
+
+            Plotly.relayout('rr_plot', {
+                shapes: [{
+                    type: 'rect',
+                    xref: 'paper',
+                    x0: 0,
+                    x1: 1,
+                    yref: 'y',
+                    y0: rrAvg - 0.2 * rrAvg,
+                    y1: rrAvg + 0.2 * rrAvg,
+                    fillcolor: 'rgba(0, 255, 0, 0.2)',  // semi-transparent green
+                    line: { width: 0 }
+                },
+                {
+                    type: 'line',
+                    x0: 0,
+                    x1: 1,
+                    xref: 'paper',
+                    y0: 0.8 * rrAvg,
+                    y1: 0.8 * rrAvg,
+                    line: {
+                        color: 'red',
+                        width: 2,
+                        dash: 'dashdot'
+                    }
+                },
+                {
+                    type: 'line',
+                    x0: 0,
+                    x1: 1,
+                    xref: 'paper',
+                    y0: 1.8 * rrAvg,
+                    y1: 1.8 * rrAvg,
+                    line: {
+                        color: 'red',
+                        width: 2,
+                        dash: 'dashdot'
+                    }
+                },
+                {
+                    type: 'circle',
+                    xref: 'x',
+                    yref: 'y',
+                    x0: 0 - 1,
+                    x1: 0 + 1,
+                    y0: yPrime - 0.02,
+                    y1: yPrime + 0.02,
+                    fillcolor: 'orange',
+                    line: { color: 'orange' }
+                }]
+            });
+
+            Plotly.relayout('hr_plot', {
+                shapes: [
+                    {
+                        type: 'circle',
+                        xref: 'x',
+                        yref: 'y',
+                        x0: data.hr_buffer.length - 0.7,
+                        x1: data.hr_buffer.length + 0.7,
+                        y0: data.hr_buffer[data.hr_buffer.length - 1] - 2,
+                        y1: data.hr_buffer[data.hr_buffer.length - 1] + 2,
+                        fillcolor: 'red',
+                        line: { color: 'red' }
+                    },
+                    {
+                        type: 'line',
+                        x0: 0,
+                        x1: 1,
+                        xref: 'paper',
+                        y0: 60,
+                        y1: 60,
+                        line: {
+                            color: 'red',
+                            width: 2,
+                            dash: 'dashdot'
+                        }
+                    }]
+            });
+
+        }
+
+        function forceResizePlots() {
+            Plotly.Plots.resize('hr_plot');
+            Plotly.Plots.resize('rr_plot');
+        }
+
+        plotInitial();
+        setTimeout(forceResizePlots, 1);
+        setInterval(updateData, 1000);  // Update every second
+
+        updateStats();
+        setInterval(updateStats, 1000);  // Update every second
+    </script>
+</body>
+<style>
+    .tooltiptext {
+        visibility: hidden;
+        width: 130px;
+        background-color: black;
+        color: #fff;
+        text-align: center;
+        border-radius: 6px;
+        padding: 5px 0;
+        position: absolute;
+        z-index: 1;
+        font-size: small;
+        top: 20px;
+    }
+
+    .tooltip:hover .tooltiptext {
+        visibility: visible;
+    }
+
+    #current_hr {
+        color:red;
+    }
+    
+    #current_hr_from_rr {
+        color:orange;
+    }
+    
+    #current_hr_from_small_window {
+        color: blue;
+    }
+
+    #plotspace {
+        display: grid;
+        grid-auto-flow: column;
+        width: 90vw;
+        height: 60vh;
+        border: 1px solid black;
+        border-radius: 5px;
+        background-color: lightblue;
+        margin: 10px;
+    }
+
+    #plotspace > div {
+        min-width: 0;
+        min-height: 0;
+    }
+
+    #hr_plot_outer {
+        min-width: 0;
+        min-height: 0;
+    }
+
+    #rr_plot_outer {
+        min-width: 0;
+        min-height: 0;
+    }
+</style>
+
+</html>
